@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 AS builder
 
 ARG CARGO_PROFILE
 ARG FEATURES
@@ -35,7 +35,7 @@ RUN --mount=target=. \
 
 # Export the binary to the clean image.
 # TODO(zyy17): Maybe should use the more secure container image.
-FROM ubuntu:22.04 AS base
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 AS base
 
 ARG OUTPUT_DIR
 

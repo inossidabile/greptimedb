@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 AS builder
 
 ARG CARGO_PROFILE
 ARG FEATURES
@@ -33,7 +33,7 @@ RUN --mount=target=. \
     FEATURES=${FEATURES} \
     TARGET_DIR=/out/target
 
-FROM ubuntu:22.04 AS libs
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401 AS libs
 
 ARG TARGETARCH
 
@@ -47,14 +47,14 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     fi
 
 # Export the binary to the clean distroless image.
-FROM gcr.io/distroless/cc-debian12:latest AS base
+FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS base
 
 ARG OUTPUT_DIR
 ARG TARGETARCH
 
 # Copy required library dependencies
 COPY --from=libs /lib /lib
-COPY --from=busybox:stable /bin/busybox /bin/busybox
+COPY --from=busybox:stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 /bin/busybox /bin/busybox
 
 WORKDIR /greptime
 COPY --from=builder /out/target/${OUTPUT_DIR}/greptime /greptime/bin/greptime

@@ -1,14 +1,14 @@
 services:
 
   zookeeper:
-    image: greptime/zookeeper:3.7
+    image: greptime/zookeeper:3.7@sha256:57a83f9f844902f62a17a31bfa5d2ae87fd6dfa04f5639de0bdba38c76e28794
     ports:
       - '2181:2181'
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
 
   kafka:
-    image: greptime/kafka:3.9.0-debian-12-r1
+    image: greptime/kafka:3.9.0-debian-12-r1@sha256:9b38734577ac16445cc49db93f41a8f7effca24aa9cbcdd798edbdbb418e0601
     container_name: kafka
     ports:
       - 9092:9092
@@ -32,7 +32,7 @@ services:
         condition: service_started
 
   etcd:
-    image: greptime/etcd:3.6.1-debian-12-r3
+    image: greptime/etcd:3.6.1-debian-12-r3@sha256:f8aa55eae55acc3816c50a73ccae7fdfc0c8de8a2ddf5006b2d37ce008d95601
     ports:
       - "2379:2379"
       - "2380:2380"
@@ -44,7 +44,7 @@ services:
       ETCD_MAX_REQUEST_BYTES: 10485760
 
   etcd-tls:
-    image: greptime/etcd:3.6.1-debian-12-r3
+    image: greptime/etcd:3.6.1-debian-12-r3@sha256:f8aa55eae55acc3816c50a73ccae7fdfc0c8de8a2ddf5006b2d37ce008d95601
     ports:
       - "2378:2378"
       - "2381:2381"
@@ -71,7 +71,7 @@ services:
       - ./etcd-tls-certs:/certs:ro
 
   minio:
-    image: greptime/minio:2024
+    image: greptime/minio:2024@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192
     ports:
       - '9000:9000'
       - '9001:9001'
@@ -84,7 +84,7 @@ services:
       - 'minio_data:/bitnami/minio/data'
 
   postgres:
-    image: docker.io/postgres:14-alpine
+    image: docker.io/postgres:14-alpine@sha256:4ea9e5ed06591da7ea23eb65465e8d3187fe79f4d5ec3ae976d29a33b013e77a
     ports:
       - 5432:5432
     volumes:
@@ -111,7 +111,7 @@ services:
         -c ssl_ca_file=/certs/root.crt"
 
   postgres15:
-    image: docker.io/postgres:15-alpine
+    image: docker.io/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
     ports:
         - 5433:5432
     volumes:
@@ -123,7 +123,7 @@ services:
         - POSTGRES_PASSWORD=admin
 
   mysql:
-    image: greptime/mysql:5.7
+    image: greptime/mysql:5.7@sha256:6c5b962faf5ab94ff91ff2dc5d16a3e4b496ef0d6bd4aef3446668e5c2b2ae2a
     ports:
       - 3306:3306
     volumes:

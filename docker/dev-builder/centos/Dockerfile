@@ -1,4 +1,4 @@
-FROM centos:7 as builder
+FROM centos:7@sha256:be65f488b7764ad3638f236b7b515b3678369a5124c47b8d32916d6487418ea4 as builder
 
 ENV LANG en_US.utf8
 

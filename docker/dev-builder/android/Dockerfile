@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 saschpe/android-ndk:34-jdk17.0.8_7-ndk25.2.9519653-cmake3.22.1
+FROM --platform=linux/amd64 saschpe/android-ndk:34-jdk17.0.8_7-ndk25.2.9519653-cmake3.22.1@sha256:a8e4e831a7ffc021c58ad740ab5187e5b5531a5421b377b21986d8fcd742c5e8
 
 ENV LANG en_US.utf8
 WORKDIR /greptimedb

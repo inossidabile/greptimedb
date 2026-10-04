@@ -1,7 +1,6 @@
 # Cross-build environment for producing riscv64 (riscv64gc-unknown-linux-gnu)
 # greptime binaries on x86_64/aarch64 hosts.
-ARG BASE_IMAGE=ubuntu:22.04
-FROM ${BASE_IMAGE}
+FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 
 ENV LANG=en_US.utf8
 WORKDIR /greptimedb

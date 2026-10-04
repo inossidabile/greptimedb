@@ -1,4 +1,4 @@
-FROM centos:7 AS builder
+FROM centos:7@sha256:be65f488b7764ad3638f236b7b515b3678369a5124c47b8d32916d6487418ea4 AS builder
 
 ARG CARGO_PROFILE
 ARG FEATURES
@@ -33,7 +33,7 @@ RUN --mount=target=.,rw \
     TARGET_DIR=/out/target
 
 # Export the binary to the clean image.
-FROM centos:7 AS base
+FROM centos:7@sha256:be65f488b7764ad3638f236b7b515b3678369a5124c47b8d32916d6487418ea4 AS base
 
 ARG OUTPUT_DIR
 
