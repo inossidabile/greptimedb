@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use api::v1::SemanticType;
 use datatypes::arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, DictionaryArray, UInt32Array,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, DictionaryArray, UInt32Array, new_null_array,
 };
 use datatypes::arrow::compute::{TakeOptions, take};
-use datatypes::arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datatypes::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Schema, SchemaRef};
 use datatypes::arrow::record_batch::RecordBatch;
 use datatypes::data_type::ConcreteDataType;
 use datatypes::prelude::DataType;
@@ -190,6 +190,12 @@ impl FlatCompatBatch {
                     pos: *index,
                     cast_type,
                 });
+            } else if expect_data_type.is_json2() {
+                // A JSON2 column has no scalar default: rows written before it existed read
+                // as nulls in the layout this projection expects, like a missing JSON2 root.
+                index_or_defaults.push(IndexOrDefault::Null {
+                    data_type: expect_data_type.as_arrow_type(),
+                });
             } else {
                 // Create a default vector with 1 element for that column.
                 let default_vector = expect_column
@@ -279,6 +285,7 @@ impl FlatCompatBatch {
                     default_vector,
                     semantic_type,
                 } => repeat_vector(default_vector, len, *semantic_type == SemanticType::Tag),
+                IndexOrDefault::Null { data_type } => Ok(new_null_array(data_type, len)),
             })
             .chain(
                 // Adds internal columns.
@@ -370,6 +377,8 @@ enum IndexOrDefault {
         /// Semantic type of the column.
         semantic_type: SemanticType,
     },
+    /// All-null column of the given type.
+    Null { data_type: ArrowDataType },
 }
 
 /// Helper to rewrite primary key to another encoding for flat format.
@@ -653,7 +662,7 @@ mod tests {
     use datatypes::arrow::record_batch::RecordBatch;
     use datatypes::prelude::ConcreteDataType;
     use datatypes::schema::ColumnSchema;
-    use datatypes::types::json_type::JsonNativeType;
+    use datatypes::types::json_type::{JsonNativeType, JsonObjectType};
     use datatypes::value::ValueRef;
     use mito_codec::row_converter::{
         DensePrimaryKeyCodec, PrimaryKeyCodecExt, SparsePrimaryKeyCodec,
@@ -872,6 +881,87 @@ mod tests {
             }
         ));
         Ok(())
+    }
+
+    #[test]
+    fn test_flat_compat_batch_fills_missing_json2_with_nulls() {
+        let json2 = ConcreteDataType::json2(JsonNativeType::Object(JsonObjectType::from([
+            ("trace_id".to_string(), JsonNativeType::String),
+            (
+                "parent".to_string(),
+                JsonNativeType::Object(JsonObjectType::from([(
+                    "span_id".to_string(),
+                    JsonNativeType::String,
+                )])),
+            ),
+        ])));
+        let actual_metadata = Arc::new(new_metadata(
+            &[
+                (
+                    0,
+                    SemanticType::Timestamp,
+                    ConcreteDataType::timestamp_millisecond_datatype(),
+                ),
+                (1, SemanticType::Field, ConcreteDataType::int64_datatype()),
+            ],
+            &[],
+        ));
+        let expected_metadata = Arc::new(new_metadata(
+            &[
+                (
+                    0,
+                    SemanticType::Timestamp,
+                    ConcreteDataType::timestamp_millisecond_datatype(),
+                ),
+                (1, SemanticType::Field, ConcreteDataType::int64_datatype()),
+                // The JSON2 column added after the rows were written.
+                (2, SemanticType::Field, json2.clone()),
+            ],
+            &[],
+        ));
+
+        let mapper = FlatProjectionMapper::all(&expected_metadata).unwrap();
+        let read_format = FlatReadFormat::new(
+            actual_metadata.clone(),
+            ReadColumns::new([0, 1, 2]),
+            None,
+            "test",
+            false,
+        )
+        .unwrap();
+        let compat_batch = FlatCompatBatch::try_new(&mapper, &read_format, false)
+            .unwrap()
+            .unwrap();
+
+        let input_columns: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![100, 200])),
+            Arc::new(TimestampMillisecondArray::from_iter_values([1000, 2000])),
+            build_flat_test_pk_array(&[&[], &[]]),
+            Arc::new(UInt64Array::from_iter_values([1, 2])),
+            Arc::new(UInt8Array::from_iter_values([
+                OpType::Put as u8,
+                OpType::Put as u8,
+            ])),
+        ];
+        let input_schema =
+            to_flat_sst_arrow_schema(&actual_metadata, &FlatSchemaOptions::default());
+        let input_batch = RecordBatch::try_new(input_schema, input_columns).unwrap();
+
+        let result = compat_batch.compat(input_batch).unwrap();
+
+        assert_eq!(2, result.num_rows());
+        let json_column = result.column_by_name("field_2").unwrap();
+        assert_eq!(&json2.as_arrow_type(), json_column.data_type());
+        assert_eq!(2, json_column.null_count());
+        assert_eq!(
+            &Int64Array::from(vec![100, 200]),
+            result
+                .column_by_name("field_1")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+        );
     }
 
     #[test]

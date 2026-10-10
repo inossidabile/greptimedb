@@ -1,0 +1,255 @@
+CREATE TABLE json2_add_column (
+    ts TIMESTAMP TIME INDEX,
+    host STRING PRIMARY KEY,
+    attrs JSON2 (
+        http.status BIGINT
+    )
+) WITH (
+    'append_mode' = 'true'
+);
+
+Affected Rows: 0
+
+INSERT INTO json2_add_column VALUES
+    (1, 'a', '{"http":{"status":200}}'),
+    (2, 'b', '{"http":{"status":502}}');
+
+Affected Rows: 2
+
+ADMIN FLUSH_TABLE('json2_add_column');
+
++---------------------------------------+
+| ADMIN FLUSH_TABLE('json2_add_column') |
++---------------------------------------+
+| 0                                     |
++---------------------------------------+
+
+INSERT INTO json2_add_column VALUES
+    (3, 'a', '{"http":{"status":404}}');
+
+Affected Rows: 1
+
+ALTER TABLE json2_add_column
+    ADD COLUMN IF NOT EXISTS trace_ctx JSON2 (
+        max_auto_expanded_paths = 16,
+        trace_id STRING INVERTED INDEX,
+        parent.span_id STRING,
+        duration_ms BIGINT,
+        sampled BOOLEAN
+    ) NULL AFTER host,
+    ADD COLUMN IF NOT EXISTS baggage JSON2 NULL;
+
+Affected Rows: 0
+
+-- Applying the same migration again is a no-op.
+ALTER TABLE json2_add_column
+    ADD COLUMN IF NOT EXISTS trace_ctx JSON2 (
+        max_auto_expanded_paths = 16,
+        trace_id STRING INVERTED INDEX,
+        parent.span_id STRING,
+        duration_ms BIGINT,
+        sampled BOOLEAN
+    ) NULL AFTER host,
+    ADD COLUMN IF NOT EXISTS baggage JSON2 NULL;
+
+Affected Rows: 0
+
+SHOW CREATE TABLE json2_add_column;
+
++------------------+-------------------------------------------------+
+| Table            | Create Table                                    |
++------------------+-------------------------------------------------+
+| json2_add_column | CREATE TABLE IF NOT EXISTS "json2_add_column" ( |
+|                  |   "ts" TIMESTAMP(3) NOT NULL,                   |
+|                  |   "host" STRING NULL,                           |
+|                  |   "trace_ctx" JSON2(                            |
+|                  |     max_auto_expanded_paths = 16,               |
+|                  |     "trace_id" STRING INVERTED INDEX,           |
+|                  |     "parent"."span_id" STRING,                  |
+|                  |     "duration_ms" BIGINT,                       |
+|                  |     "sampled" BOOLEAN                           |
+|                  |   ) NULL,                                       |
+|                  |   "attrs" JSON2(                                |
+|                  |     max_auto_expanded_paths = 100,              |
+|                  |     "http"."status" BIGINT                      |
+|                  |   ) NULL,                                       |
+|                  |   "baggage" JSON2(                              |
+|                  |     max_auto_expanded_paths = 100               |
+|                  |   ) NULL,                                       |
+|                  |   TIME INDEX ("ts"),                            |
+|                  |   PRIMARY KEY ("host")                          |
+|                  | )                                               |
+|                  |                                                 |
+|                  | ENGINE=mito                                     |
+|                  | WITH(                                           |
+|                  |   append_mode = 'true'                          |
+|                  | )                                               |
++------------------+-------------------------------------------------+
+
+-- Rows written before the columns existed, from both SST and memtable.
+SELECT ts, host, trace_ctx.trace_id, trace_ctx.parent.span_id, baggage.tenant
+FROM json2_add_column
+ORDER BY ts;
+
++-------------------------+------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+| ts                      | host | json_get(json2_add_column.trace_ctx,Utf8("$.trace_id"),Utf8View(NULL)) | json_get(json2_add_column.trace_ctx,Utf8("$.parent.span_id"),Utf8View(NULL)) | json_get(json2_add_column.baggage,Utf8("$.tenant")) |
++-------------------------+------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+| 1970-01-01T00:00:00.001 | a    |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.002 | b    |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.003 | a    |                                                                        |                                                                              |                                                     |
++-------------------------+------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+
+SELECT count(*) FROM json2_add_column WHERE trace_ctx.trace_id IS NULL;
+
++----------+
+| count(*) |
++----------+
+| 3        |
++----------+
+
+-- Writers that don't know the new columns keep working.
+INSERT INTO json2_add_column (ts, host, attrs) VALUES
+    (4, 'b', '{"http":{"status":201}}');
+
+Affected Rows: 1
+
+INSERT INTO json2_add_column (ts, host, attrs, trace_ctx, baggage) VALUES
+    (5, 'a', '{"http":{"status":200}}', '{"trace_id":"t-5","parent":{"span_id":"s-5"},"duration_ms":12,"sampled":true}', '{"tenant":"acme"}'),
+    (6, 'b', '{"http":{"status":500}}', '{"trace_id":"t-6"}', NULL);
+
+Affected Rows: 2
+
+-- Type hints of the added column are enforced.
+INSERT INTO json2_add_column (ts, host, trace_ctx) VALUES
+    (7, 'a', '{"duration_ms":"slow"}');
+
+Error: 1004(InvalidArguments), Invalid JSON: JSON value at duration_ms does not match JSON2 type hint Int64
+
+INSERT INTO json2_add_column (ts, host, trace_ctx) VALUES
+    (8, 'a', '{"sampled":"yes"}');
+
+Error: 1004(InvalidArguments), Invalid JSON: JSON value at sampled does not match JSON2 type hint Boolean
+
+SELECT ts, trace_ctx.trace_id, trace_ctx.parent.span_id, trace_ctx.duration_ms, trace_ctx.sampled, baggage.tenant
+FROM json2_add_column
+ORDER BY ts;
+
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+------------------------------------------------------------------------+----------------------------------------------------------------------+-----------------------------------------------------+
+| ts                      | json_get(json2_add_column.trace_ctx,Utf8("$.trace_id"),Utf8View(NULL)) | json_get(json2_add_column.trace_ctx,Utf8("$.parent.span_id"),Utf8View(NULL)) | json_get(json2_add_column.trace_ctx,Utf8("$.duration_ms"),Int64(NULL)) | json_get(json2_add_column.trace_ctx,Utf8("$.sampled"),Boolean(NULL)) | json_get(json2_add_column.baggage,Utf8("$.tenant")) |
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+------------------------------------------------------------------------+----------------------------------------------------------------------+-----------------------------------------------------+
+| 1970-01-01T00:00:00.001 |                                                                        |                                                                              |                                                                        |                                                                      |                                                     |
+| 1970-01-01T00:00:00.002 |                                                                        |                                                                              |                                                                        |                                                                      |                                                     |
+| 1970-01-01T00:00:00.003 |                                                                        |                                                                              |                                                                        |                                                                      |                                                     |
+| 1970-01-01T00:00:00.004 |                                                                        |                                                                              |                                                                        |                                                                      |                                                     |
+| 1970-01-01T00:00:00.005 | t-5                                                                    | s-5                                                                          | 12                                                                     | true                                                                 | acme                                                |
+| 1970-01-01T00:00:00.006 | t-6                                                                    |                                                                              |                                                                        |                                                                      |                                                     |
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+------------------------------------------------------------------------+----------------------------------------------------------------------+-----------------------------------------------------+
+
+SELECT arrow_typeof(trace_ctx.duration_ms), arrow_typeof(trace_ctx.sampled)
+FROM json2_add_column
+WHERE ts = 5;
+
++--------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
+| arrow_typeof(json_get(json2_add_column.trace_ctx,Utf8("$.duration_ms"),Int64(NULL))) | arrow_typeof(json_get(json2_add_column.trace_ctx,Utf8("$.sampled"),Boolean(NULL))) |
++--------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
+| Int64                                                                                | Boolean                                                                            |
++--------------------------------------------------------------------------------------+------------------------------------------------------------------------------------+
+
+SELECT ts FROM json2_add_column WHERE trace_ctx.trace_id = 't-6';
+
++-------------------------+
+| ts                      |
++-------------------------+
+| 1970-01-01T00:00:00.006 |
++-------------------------+
+
+ADMIN FLUSH_TABLE('json2_add_column');
+
++---------------------------------------+
+| ADMIN FLUSH_TABLE('json2_add_column') |
++---------------------------------------+
+| 0                                     |
++---------------------------------------+
+
+SELECT ts, trace_ctx.trace_id, trace_ctx.parent.span_id, baggage.tenant
+FROM json2_add_column
+ORDER BY ts;
+
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+| ts                      | json_get(json2_add_column.trace_ctx,Utf8("$.trace_id"),Utf8View(NULL)) | json_get(json2_add_column.trace_ctx,Utf8("$.parent.span_id"),Utf8View(NULL)) | json_get(json2_add_column.baggage,Utf8("$.tenant")) |
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+| 1970-01-01T00:00:00.001 |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.002 |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.003 |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.004 |                                                                        |                                                                              |                                                     |
+| 1970-01-01T00:00:00.005 | t-5                                                                    | s-5                                                                          | acme                                                |
+| 1970-01-01T00:00:00.006 | t-6                                                                    |                                                                              |                                                     |
++-------------------------+------------------------------------------------------------------------+------------------------------------------------------------------------------+-----------------------------------------------------+
+
+SELECT ts FROM json2_add_column WHERE trace_ctx.trace_id = 't-5';
+
++-------------------------+
+| ts                      |
++-------------------------+
+| 1970-01-01T00:00:00.005 |
++-------------------------+
+
+-- Invalid JSON2 settings are rejected without changing the table.
+ALTER TABLE json2_add_column ADD COLUMN bad JSON2 (a STRING, a BIGINT);
+
+Error: 2000(InvalidSyntax), Invalid SQL syntax: sql parser error: Invalid SQL, error: duplicated JSON2 type hint path 'a'
+
+ALTER TABLE json2_add_column ADD COLUMN bad JSON2 (a INT8);
+
+Error: 2000(InvalidSyntax), Invalid SQL syntax: sql parser error: Invalid SQL, error: unsupported JSON2 type hint data type: INT8; supported types: STRING, BIGINT, BIGINT UNSIGNED, DOUBLE, BOOLEAN; supported aliases: INT64, UINT64, FLOAT64
+
+-- Plain columns still go through the usual path, also mixed with JSON2 ones.
+ALTER TABLE json2_add_column
+    ADD COLUMN zone STRING DEFAULT 'z1' COMMENT 'zone' FIRST,
+    ADD COLUMN extra JSON2 (k STRING) AFTER host;
+
+Affected Rows: 0
+
+DESC TABLE json2_add_column;
+
++-----------+----------------------+-----+------+---------+---------------+
+| Column    | Type                 | Key | Null | Default | Semantic Type |
++-----------+----------------------+-----+------+---------+---------------+
+| zone      | String               |     | YES  | z1      | FIELD         |
+| ts        | TimestampMillisecond | PRI | NO   |         | TIMESTAMP     |
+| host      | String               | PRI | YES  |         | TAG           |
+| extra     | Json2                |     | YES  |         | FIELD         |
+| trace_ctx | Json2                |     | YES  |         | FIELD         |
+| attrs     | Json2                |     | YES  |         | FIELD         |
+| baggage   | Json2                |     | YES  |         | FIELD         |
++-----------+----------------------+-----+------+---------+---------------+
+
+SELECT ts, zone, extra.k FROM json2_add_column WHERE ts <= 2 ORDER BY ts;
+
++-------------------------+------+-------------------------------------------------------------+
+| ts                      | zone | json_get(json2_add_column.extra,Utf8("$.k"),Utf8View(NULL)) |
++-------------------------+------+-------------------------------------------------------------+
+| 1970-01-01T00:00:00.001 | z1   |                                                             |
+| 1970-01-01T00:00:00.002 | z1   |                                                             |
++-------------------------+------+-------------------------------------------------------------+
+
+DROP TABLE json2_add_column;
+
+Affected Rows: 0
+
+CREATE TABLE json2_add_column_non_append (
+    ts TIMESTAMP TIME INDEX,
+    v INT
+);
+
+Affected Rows: 0
+
+-- JSON2 still requires append mode.
+ALTER TABLE json2_add_column_non_append ADD COLUMN j JSON2 (a STRING);
+
+Error: 1004(InvalidArguments), Invalid SQL, error: JSON2 column `j` requires append_mode='true'
+
+DROP TABLE json2_add_column_non_append;
+
+Affected Rows: 0
+
