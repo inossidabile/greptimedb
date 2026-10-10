@@ -232,15 +232,29 @@ pub struct AddColumn {
     pub column_def: ColumnDef,
     pub location: Option<AddColumnLocation>,
     pub add_if_not_exists: bool,
+    /// Settings of a `JSON2(...)` column, as accepted by `CREATE TABLE`.
+    pub json2_options: Option<Json2Options>,
 }
 
 impl Display for AddColumn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(location) = &self.location {
-            write!(f, "{} {location}", self.column_def)
+        if let Some(json2_options) = &self.json2_options {
+            let ColumnDef {
+                name,
+                data_type,
+                options,
+            } = &self.column_def;
+            write!(f, "{name} {data_type}{json2_options}")?;
+            for option in options {
+                write!(f, " {option}")?;
+            }
         } else {
-            write!(f, "{}", self.column_def)
+            write!(f, "{}", self.column_def)?;
         }
+        if let Some(location) = &self.location {
+            write!(f, " {location}")?;
+        }
+        Ok(())
     }
 }
 
@@ -453,6 +467,37 @@ mod tests {
     use crate::parser::{ParseOptions, ParserContext};
     use crate::statements::create::Json2Options;
     use crate::statements::statement::Statement;
+
+    #[test]
+    fn test_display_alter_add_json2_column() {
+        let sql = r#"ALTER TABLE request_logs ADD COLUMN trace_ctx JSON2 (max_auto_expanded_paths = 64, trace_id STRING INVERTED INDEX, parent.span_id STRING) COMMENT 'trace_ctx' AFTER ts, ADD COLUMN extra JSON2, ADD COLUMN host STRING FIRST"#;
+        let stmts =
+            ParserContext::create_with_dialect(sql, &GreptimeDbDialect {}, ParseOptions::default())
+                .unwrap();
+        let Statement::AlterTable(alter_table) = &stmts[0] else {
+            unreachable!();
+        };
+        let displayed = alter_table.to_string();
+        assert_eq!(
+            r#"ALTER TABLE request_logs ADD COLUMN trace_ctx JSON2(
+    max_auto_expanded_paths = 64,
+    "trace_id" STRING INVERTED INDEX,
+    "parent"."span_id" STRING
+  ) COMMENT 'trace_ctx' AFTER ts, ADD COLUMN extra JSON2, ADD COLUMN host STRING FIRST"#,
+            displayed
+        );
+
+        let reparsed = ParserContext::create_with_dialect(
+            &displayed,
+            &GreptimeDbDialect {},
+            ParseOptions::default(),
+        )
+        .unwrap();
+        let Statement::AlterTable(reparsed) = &reparsed[0] else {
+            unreachable!();
+        };
+        assert_eq!(alter_table.alter_operation(), reparsed.alter_operation());
+    }
 
     #[test]
     fn test_display_alter() {

@@ -828,7 +828,7 @@ pub(crate) fn to_alter_table_expr(
             add_columns: add_columns
                 .into_iter()
                 .map(|add_column| {
-                    let column_def = sql_column_def_to_grpc_column_def(
+                    let mut column_def = sql_column_def_to_grpc_column_def(
                         &add_column.column_def,
                         Some(&query_ctx.timezone()),
                     )
@@ -839,6 +839,21 @@ pub(crate) fn to_alter_table_expr(
                             feat: "Add column with interval type",
                         }
                         .fail();
+                    }
+                    // A JSON2 column is only complete with its extension type and settings,
+                    // which travel as column options. Build them exactly as `CREATE TABLE`
+                    // does, so an added JSON2 column is indistinguishable from a created one.
+                    let column = SqlColumn {
+                        column_def: add_column.column_def.clone(),
+                        extensions: ColumnExtensions {
+                            json2_options: add_column.json2_options.clone(),
+                            ..Default::default()
+                        },
+                    };
+                    let column_schema = column_to_schema(&column, "", Some(&query_ctx.timezone()))
+                        .context(ParseSqlSnafu)?;
+                    if column_schema.data_type.is_json2() {
+                        column_def.options = options_from_column_schema(&column_schema);
                     }
                     Ok(AddColumn {
                         column_def: Some(column_def),
@@ -1836,6 +1851,61 @@ SELECT max(c1), min(c2) FROM schema_2.table_2;";
         let settings = modify.settings.as_ref().unwrap();
         assert_eq!(Some(100), settings.max_auto_expanded_paths);
         assert!(settings.type_hints.is_empty());
+    }
+
+    #[test]
+    fn test_to_alter_add_json2_column_expr() {
+        let parse = |sql: &str| {
+            ParserContext::create_with_dialect(sql, &GreptimeDbDialect {}, ParseOptions::default())
+                .unwrap()
+                .pop()
+                .unwrap()
+        };
+        let Statement::CreateTable(create_table) = parse(
+            "CREATE TABLE logs (
+                ts TIMESTAMP TIME INDEX,
+                trace_ctx JSON2 (max_auto_expanded_paths = 64, trace_id STRING INVERTED INDEX, parent.span_id STRING),
+                extra JSON2,
+                host STRING
+            ) WITH ('append_mode' = 'true')",
+        ) else {
+            unreachable!()
+        };
+        let create_expr = create_to_expr(&create_table, &QueryContext::arc()).unwrap();
+
+        let Statement::AlterTable(alter_table) = parse(
+            "ALTER TABLE logs
+                ADD COLUMN trace_ctx JSON2 (max_auto_expanded_paths = 64, trace_id STRING INVERTED INDEX, parent.span_id STRING),
+                ADD COLUMN extra JSON2,
+                ADD COLUMN host STRING",
+        ) else {
+            unreachable!()
+        };
+        let expr = to_alter_table_expr(alter_table, &QueryContext::arc()).unwrap();
+        let AlterTableKind::AddColumns(AddColumns { add_columns, .. }) = expr.kind.unwrap() else {
+            unreachable!()
+        };
+
+        assert_eq!(3, add_columns.len());
+        for add_column in add_columns {
+            let added = add_column.column_def.unwrap();
+            let created = create_expr
+                .column_defs
+                .iter()
+                .find(|c| c.name == added.name)
+                .unwrap();
+            assert_eq!(created.data_type, added.data_type, "{}", added.name);
+            assert_eq!(
+                created.datatype_extension, added.datatype_extension,
+                "{}",
+                added.name
+            );
+            assert_eq!(created.options, added.options, "{}", added.name);
+            assert_eq!(
+                try_as_column_schema(created).unwrap(),
+                try_as_column_schema(&added).unwrap()
+            );
+        }
     }
 
     #[test]
